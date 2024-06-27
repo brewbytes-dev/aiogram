@@ -10,7 +10,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Union
 
 from .. import loggers
 from ..client.bot import Bot
-from ..exceptions import TelegramAPIError
+from ..exceptions import TelegramAPIError, TelegramRetryAfter
 from ..fsm.middleware import FSMContextMiddleware
 from ..fsm.storage.base import BaseEventIsolation, BaseStorage
 from ..fsm.storage.memory import DisabledEventIsolation, MemoryStorage
@@ -212,6 +212,19 @@ class Dispatcher(Router):
         while True:
             try:
                 updates = await bot(get_updates, **kwargs)
+            except TelegramRetryAfter as e:
+                failed = True
+                # In case of Flood control, we should follow Telegram Bot API recommendation
+
+                loggers.dispatcher.error("Failed to fetch updates - %s: %s", type(e).__name__, e)
+                loggers.dispatcher.warning(
+                    "Flood control exceeded. Sleep for %d seconds and try again... (bot id = %d)",
+                    e.retry_after,
+                    bot.id,
+                )
+                backoff.reset()
+                await asyncio.sleep(e.retry_after)
+                continue
             except Exception as e:
                 failed = True
                 # In cases when Telegram Bot API was inaccessible don't need to stop polling
